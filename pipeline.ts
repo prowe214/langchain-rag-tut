@@ -2,7 +2,6 @@ import "cheerio";
 import { CheerioWebBaseLoader } from "@langchain/community/document_loaders/web/cheerio";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { embeddings, llm, vectorStore } from "./models";
-import { pull } from "langchain/hub";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { Document } from "@langchain/core/documents";
 import { Annotation, StateGraph } from "@langchain/langgraph";
@@ -53,12 +52,6 @@ async function main() {
 
   await vectorStoreQA.addDocuments(allSplits);
 
-  // embed and store all splits into vector store
-  //   await vectorStore.addDocuments(allSplits);
-
-  //   use pre-created langchain prompt for helpful chatbot
-  //   const promptTemplate = await pull<ChatPromptTemplate>("rlm/rag-prompt");
-
   // use custom system prompt
   const template = `Use the following pieces of context to answer the question at the end.
       If you don't know the answer, just say that you don't know, don't try to make up an answer.
@@ -72,17 +65,6 @@ async function main() {
       Helpful Answer:`;
 
   const promptTemplate = ChatPromptTemplate.fromMessages([["user", template]]);
-
-  //   const InputStateAnnotation = Annotation.Root({
-  //     question: Annotation<string>,
-  //   });
-
-  //   const StateAnnotation = Annotation.Root({
-  //     question: Annotation<string>,
-  //     context: Annotation<Document[]>,
-  //     answer: Annotation<string>,
-  //   });
-
   const StateAnnotationQA = Annotation.Root({
     question: Annotation<string>,
     search: Annotation<z.infer<typeof searchSchema>>,
@@ -95,31 +77,14 @@ async function main() {
     return { search: result };
   };
 
-  //   retrieve without query analysis
-  //   const retrieve = async (state: typeof InputStateAnnotation.State) => {
-  //     const retrievedDocs = await vectorStore.similaritySearch(state.question);
-  //     return { context: retrievedDocs };
-  //   };
-
-  // generate without query analysis
-  //   const generate = async (state: typeof StateAnnotation.State) => {
-  //     const docsContent = state.context.map((doc) => doc.pageContent).join("\n");
-  //     const messages = await promptTemplate.invoke({
-  //       question: state.question,
-  //       context: docsContent,
-  //     });
-  //     const response = await llm.invoke(messages);
-  //     return { answer: response.content };
-  //   };
-
   // retrieve with query analysis
   const retrieveQA = async (state: typeof StateAnnotationQA.State) => {
     const filter = (doc: Document) =>
       doc.metadata.section === state.search.section;
     const retrievedDocs = await vectorStoreQA.similaritySearch(
       state.search.query,
-      2
-      //   filter
+      2,
+      filter
     );
     console.log("RETRIEVED DOCUMENTS", retrievedDocs);
 
@@ -139,14 +104,6 @@ async function main() {
     const response = await llm.invoke(messages);
     return { answer: response.content };
   };
-
-  //   const graph = new StateGraph(StateAnnotation)
-  //     .addNode("retrieve", retrieve)
-  //     .addNode("generate", generate)
-  //     .addEdge("__start__", "retrieve")
-  //     .addEdge("retrieve", "generate")
-  //     .addEdge("generate", "__end__")
-  //     .compile();
 
   const graphQA = new StateGraph(StateAnnotationQA)
     .addNode("analyzeQuery", analyzeQuery)
@@ -172,25 +129,6 @@ async function main() {
     console.log(chunk);
     console.log("\n========\n");
   }
-  //     const result = await graphQA.invoke(inputs);
-  //   console.log(result.context.slice(0, 2));
-  //   console.log(`\nAnswer: ${result.answer}`);
-
-  // Stream output chunks
-  //   console.log("inputs:", inputs);
-  //   console.log("\n========\n");
-  //   for await (const chunk of await graph.stream(inputs, {
-  //     streamMode: "updates",
-  //   })) {
-  //     console.log(chunk);
-  //     console.log("\n========\n");
-  //   }
-
-  // Stream tokens
-  // const stream = await graph.stream(inputs, { streamMode: "messages" });
-  // for await (const [message, _metadata] of stream) {
-  //   process.stdout.write(message.content + "");
-  // }
 }
 
 main();
