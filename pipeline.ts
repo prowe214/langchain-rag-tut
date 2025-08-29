@@ -21,8 +21,6 @@ const splitter = new RecursiveCharacterTextSplitter({
   chunkOverlap: 200,
 });
 
-const vectorStoreQA = new MemoryVectorStore(embeddings);
-
 const searchSchema = z.object({
   query: z.string().describe("Search query to run."),
   section: z.enum(["beginning", "middle", "end"]).describe("Section to query."),
@@ -50,7 +48,7 @@ async function main() {
     }
   });
 
-  await vectorStoreQA.addDocuments(allSplits);
+  await vectorStore.addDocuments(allSplits);
 
   // use custom system prompt
   const template = `Use the following pieces of context to answer the question at the end.
@@ -65,23 +63,23 @@ async function main() {
       Helpful Answer:`;
 
   const promptTemplate = ChatPromptTemplate.fromMessages([["user", template]]);
-  const StateAnnotationQA = Annotation.Root({
+  const StateAnnotation = Annotation.Root({
     question: Annotation<string>,
     search: Annotation<z.infer<typeof searchSchema>>,
     context: Annotation<Document[]>,
     answer: Annotation<string>,
   });
 
-  const analyzeQuery = async (state: typeof StateAnnotationQA.State) => {
+  const analyzeQuery = async (state: typeof StateAnnotation.State) => {
     const result = await structuredLlm.invoke(state.question);
     return { search: result };
   };
 
   // retrieve with query analysis
-  const retrieveQA = async (state: typeof StateAnnotationQA.State) => {
+  const retrieve = async (state: typeof StateAnnotation.State) => {
     const filter = (doc: Document) =>
       doc.metadata.section === state.search.section;
-    const retrievedDocs = await vectorStoreQA.similaritySearch(
+    const retrievedDocs = await vectorStore.similaritySearch(
       state.search.query,
       2,
       filter
@@ -92,7 +90,7 @@ async function main() {
   };
 
   //   generate with query analysis
-  const generateQA = async (state: typeof StateAnnotationQA.State) => {
+  const generate = async (state: typeof StateAnnotation.State) => {
     const docsContent = state.context
       .map((doc: Document) => doc.pageContent)
       .join("\n");
@@ -105,25 +103,24 @@ async function main() {
     return { answer: response.content };
   };
 
-  const graphQA = new StateGraph(StateAnnotationQA)
+  const graph = new StateGraph(StateAnnotation)
     .addNode("analyzeQuery", analyzeQuery)
-    .addNode("retrieveQA", retrieveQA)
-    .addNode("generateQA", generateQA)
+    .addNode("retrieve", retrieve)
+    .addNode("generate", generate)
     .addEdge("__start__", "analyzeQuery")
-    .addEdge("analyzeQuery", "retrieveQA")
-    .addEdge("retrieveQA", "generateQA")
-    .addEdge("generateQA", "__end__")
+    .addEdge("analyzeQuery", "retrieve")
+    .addEdge("retrieve", "generate")
+    .addEdge("generate", "__end__")
     .compile();
 
-  const inputs = { question: "What is task decomposition?" };
-  const inputsQA = {
+  const inputs = {
     question: "What does the end of the post say about task decomposition?",
   };
 
-  console.log(inputsQA);
+  console.log(inputs);
   console.log("\n========\n");
   // Print output in single response
-  for await (const chunk of await graphQA.stream(inputsQA, {
+  for await (const chunk of await graph.stream(inputs, {
     streamMode: "updates",
   })) {
     console.log(chunk);
