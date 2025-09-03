@@ -2,16 +2,18 @@ import "cheerio";
 import { CheerioWebBaseLoader } from "@langchain/community/document_loaders/web/cheerio";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { llm, vectorStore } from "./models";
-import { ChatPromptTemplate } from "@langchain/core/prompts";
-import { Document } from "@langchain/core/documents";
 import {
-  Annotation,
+  MemorySaver,
   MessagesAnnotation,
   StateGraph,
 } from "@langchain/langgraph";
 import { z } from "zod";
 import { tool } from "@langchain/core/tools";
-import { ToolNode, toolsCondition } from "@langchain/langgraph/prebuilt";
+import {
+  createReactAgent,
+  ToolNode,
+  toolsCondition,
+} from "@langchain/langgraph/prebuilt";
 import {
   AIMessage,
   BaseMessage,
@@ -44,6 +46,8 @@ const splitter = new RecursiveCharacterTextSplitter({
   chunkSize: 1000,
   chunkOverlap: 200,
 });
+
+const checkpointer = new MemorySaver();
 
 const searchSchema = z.object({
   query: z.string().describe("Search query to run."),
@@ -88,28 +92,6 @@ async function main() {
 
       Helpful Answer:`;
 
-  const promptTemplate = ChatPromptTemplate.fromMessages([["user", template]]);
-  const StateAnnotation = Annotation.Root({
-    question: Annotation<string>,
-    search: Annotation<z.infer<typeof searchSchema>>,
-    context: Annotation<Document[]>,
-    answer: Annotation<string>,
-  });
-
-  // retrieve with query analysis
-  //   const retrieve = async (state: typeof StateAnnotation.State) => {
-  //     const filter = (doc: Document) =>
-  //       doc.metadata.section === state.search.section;
-  //     const retrievedDocs = await vectorStore.similaritySearch(
-  //       state.search.query,
-  //       2,
-  //       filter
-  //     );
-  //     console.log("RETRIEVED DOCUMENTS", retrievedDocs);
-
-  //     return { context: retrievedDocs };
-  //   };
-
   // retrieve with tool-calling
   const retrieve = tool(
     async ({ query }) => {
@@ -129,20 +111,6 @@ async function main() {
     }
   );
 
-  //   generate with query analysis
-  //   const generate = async (state: typeof StateAnnotation.State) => {
-  //     const docsContent = state.context
-  //       .map((doc: Document) => doc.pageContent)
-  //       .join("\n");
-  //     const messages = await promptTemplate.invoke({
-  //       question: state.question,
-  //       context: docsContent,
-  //     });
-
-  //     const response = await llm.invoke(messages);
-  //     return { answer: response.content };
-  //   };
-
   // Step 1: Generate an AIMessage that may include a tool-call to be sent.
   async function queryOrRespond(state: typeof MessagesAnnotation.State) {
     const llmWithTools = llm.bindTools([retrieve]);
@@ -154,10 +122,10 @@ async function main() {
   //   Step 2: Execute the retrieval
   const tools = new ToolNode([retrieve]);
 
-  const analyzeQuery = async (state: typeof StateAnnotation.State) => {
-    const result = await structuredLlm.invoke(state.question);
-    return { search: result };
-  };
+  const agent = createReactAgent({
+    llm,
+    tools: [retrieve],
+  });
 
   //   Step 3: Generate a response using the retrieved content
   async function generate(state: typeof MessagesAnnotation.State) {
@@ -202,15 +170,6 @@ async function main() {
     return { messages: [response] };
   }
 
-  //   const graph = new StateGraph(StateAnnotation)
-  //     .addNode("analyzeQuery", analyzeQuery)
-  //     .addNode("retrieve", retrieve)
-  //     .addNode("generate", generate)
-  //     .addEdge("__start__", "analyzeQuery")
-  //     .addEdge("analyzeQuery", "retrieve")
-  //     .addEdge("retrieve", "generate")
-  //     .addEdge("generate", "__end__")
-  //     .compile();
   const graphBuilder = new StateGraph(MessagesAnnotation)
     .addNode("queryOrRespond", queryOrRespond)
     .addNode("tools", tools)
@@ -223,11 +182,54 @@ async function main() {
     .addEdge("tools", "generate")
     .addEdge("generate", "__end__");
 
-  const graph = graphBuilder.compile();
+  const graphWithMemory = graphBuilder.compile({ checkpointer });
 
-  const inputs1 = { messages: [{ role: "user", content: "hello" }] };
+  const threadConfig = {
+    configurable: {
+      thread_id: "abc123",
+    },
+    streamMode: "values" as const,
+  };
 
-  for await (const step of await graph.stream(inputs1, {
+  const inputs = {
+    messages: [{ role: "user", content: "What is Task Decomposition?" }],
+  };
+
+  const inputs2 = {
+    messages: [
+      {
+        role: "user",
+        content: "Can you look up some common ways of doing it?",
+      },
+    ],
+  };
+
+  let inputMessage = `What is the standard method for Task Decomposition?
+    Once you get the answer, look up common extensions of that method.`;
+
+  let inputs5 = { messages: [{ role: "user", content: inputMessage }] };
+
+  // first query
+  for await (const step of await graphWithMemory.stream(inputs, threadConfig)) {
+    const lastMessage = step.messages[step.messages.length - 1];
+
+    prettyPrint(lastMessage);
+    console.log("--------\n");
+  }
+
+  // followup query
+  for await (const step of await graphWithMemory.stream(
+    inputs2,
+    threadConfig
+  )) {
+    const lastMessage = step.messages[step.messages.length - 1];
+
+    prettyPrint(lastMessage);
+    console.log("--------\n");
+  }
+
+  // using agent
+  for await (const step of await agent.stream(inputs5, {
     streamMode: "values",
   })) {
     const lastMessage = step.messages[step.messages.length - 1];
