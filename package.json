@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "start": "tsx pipeline.ts",
+    "dev": "tsx pipeline.ts"
+  },
   "dependencies": {
     "@langchain/anthropic": "^0.3.26",
     "@langchain/cohere": "^0.3.4",
