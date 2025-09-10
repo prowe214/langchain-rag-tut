@@ -8,5 +8,8 @@
     "cheerio": "^1.1.2",
     "dotenv": "^17.2.1",
     "langchain": "^0.3.31"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.5"
   }
 }
